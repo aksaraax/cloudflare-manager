@@ -1,0 +1,50 @@
+{
+  "name": "cloudflare-manager",
+  "version": "1.0.0",
+  "description": "Multi-account Cloudflare management tool with TUI and Telegram bot interfaces",
+  "type": "module",
+  "bin": {
+    "cfm": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "start:tui": "CFM_MODE=tui node dist/index.js",
+    "start:bot": "CFM_MODE=bot node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src --max-warnings 0",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src",
+    "check": "pnpm run lint && pnpm run format:check && pnpm run test && pnpm audit --audit-level high",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cloudflare": "^3.0.0",
+    "dotenv": "^16.0.0",
+    "ink": "^4.4.1",
+    "react": "^18.2.0",
+    "telegraf": "^4.15.3",
+    "tldts": "^6.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.2.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@vitest/coverage-v8": "^1.0.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-security": "^2.1.0",
+    "prettier": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+
