@@ -1,17 +1,6 @@
 import { type Context } from 'telegraf'
-import { accountManager } from '../../core/config/accounts.js'
 import { listWorkers } from '../../core/api/workers.js'
-import { escapeHtml, formatTable } from '../utils.js'
-
-function getApiToken(): string {
-  const token =
-    accountManager.getActiveToken() ??
-    process.env['CFM_API_TOKEN'] ??
-    process.env['CF_API_TOKEN'] ??
-    process.env['CLOUDFLARE_API_TOKEN']
-  if (!token) throw new Error('No Cloudflare API token configured')
-  return token
-}
+import { escapeHtml, formatTable, getApiToken } from '../utils.js'
 
 export async function handleWorkers(ctx: Context): Promise<void> {
   const accountId = process.env['CF_ACCOUNT_ID'] ?? process.env['CFM_ACCOUNT_ID']

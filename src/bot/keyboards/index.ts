@@ -19,6 +19,24 @@ export function zoneSelectKeyboard(
   }
 }
 
+export function zonePageKeyboard(
+  page: number,
+  pageCount: number,
+  keyword: string,
+): InlineKeyboardMarkup {
+  if (pageCount <= 1) return { inline_keyboard: [] }
+  const target = (p: number): string => `zones:${p}:${keyword}`
+  return {
+    inline_keyboard: [
+      [
+        { text: '◀️', callback_data: target(page > 1 ? page - 1 : pageCount) },
+        { text: `${page}/${pageCount}`, callback_data: 'noop' },
+        { text: '▶️', callback_data: target(page < pageCount ? page + 1 : 1) },
+      ],
+    ],
+  }
+}
+
 export function bundleSelectKeyboard(selection: {
   mx: boolean
   spf: boolean

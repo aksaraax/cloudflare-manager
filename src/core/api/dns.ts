@@ -1,7 +1,8 @@
 import { ApiError } from '../utils/errors.js'
 import { logger } from '../utils/logger.js'
 import { withRetry } from '../utils/retry.js'
-import { getClient } from './client.js'
+import { getClient, tokenKey } from './client.js'
+import { fetchAllPages, type RawPage } from './pagination.js'
 
 export type DnsRecordType = 'A' | 'AAAA' | 'CNAME' | 'MX' | 'TXT' | 'NS' | 'SRV' | 'CAA'
 
@@ -32,11 +33,12 @@ interface DnsCacheEntry {
 }
 
 const DNS_CACHE_TTL_MS = 30_000
+const DNS_RECORDS_PER_PAGE = 5000
 
 const dnsCache = new Map<string, DnsCacheEntry>()
 
 function cacheKey(apiToken: string, zoneId: string): string {
-  return `${apiToken.slice(-8)}:${zoneId}`
+  return `${tokenKey(apiToken)}:${zoneId}`
 }
 
 function isCacheValid(entry: DnsCacheEntry): boolean {
@@ -94,9 +96,16 @@ export async function listDnsRecords(
     records = await withRetry(async () => {
       try {
         const client = getClient(apiToken)
-        const pages = await client.dns.records.list({ zone_id: zoneId })
-        const raw = pages.result ?? []
-        return (raw as unknown as Record<string, unknown>[]).map(mapRecord)
+        const raw = await fetchAllPages(
+          async (page) =>
+            (await client.dns.records.list({
+              zone_id: zoneId,
+              page,
+              per_page: DNS_RECORDS_PER_PAGE,
+            })) as unknown as RawPage,
+          DNS_RECORDS_PER_PAGE,
+        )
+        return raw.map(mapRecord)
       } catch (err) {
         throw new ApiError(
           'DNS_LIST_FAILED',
@@ -254,6 +263,7 @@ export interface BulkDeleteFilter {
   name?: string | undefined
   all?: boolean | undefined
   concurrency?: number | undefined
+  onProgress?: ((done: number, total: number) => void) | undefined
 }
 
 export async function bulkDeleteDnsRecords(
@@ -310,6 +320,7 @@ export async function bulkDeleteDnsRecords(
         errors.push({ id: record.id, name: record.name, error: errorMsg })
         logger.error('bulk dns delete failed for record', { zoneId, recordId: record.id, error: errorMsg })
       }
+      filter.onProgress?.(deleted + errors.length, targetRecords.length)
     }
   }
 

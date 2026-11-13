@@ -42,6 +42,24 @@ describe('withRetry', () => {
     expect(fn).toHaveBeenCalledTimes(1)
   })
 
+  it('does not retry client errors reported by the API', async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValue(new ApiError('ZONE_CREATE_FAILED', 'exists', undefined, undefined, { status: 400 }))
+    await expect(withRetry(fn, { maxAttempts: 5, baseDelayMs: 1 })).rejects.toThrow(ApiError)
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries rate-limited and server errors reported by the API', async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError('X', 'limited', undefined, undefined, { status: 429 }))
+      .mockRejectedValueOnce(new ApiError('X', 'down', undefined, undefined, { status: 503 }))
+      .mockResolvedValue('ok')
+    expect(await withRetry(fn, { baseDelayMs: 1, jitter: false })).toBe('ok')
+    expect(fn).toHaveBeenCalledTimes(3)
+  })
+
   it('respects custom maxAttempts configuration', async () => {
     const fn = vi.fn().mockRejectedValue(new Error('Fail'))
     await expect(withRetry(fn, { maxAttempts: 2, baseDelayMs: 1, jitter: false })).rejects.toThrow()

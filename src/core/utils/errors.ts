@@ -74,6 +74,21 @@ export class RateLimitError extends AppError {
   }
 }
 
+export function causeDetail(cause: unknown): string {
+  if (cause !== null && typeof cause === 'object' && 'errors' in cause && Array.isArray(cause.errors)) {
+    const first: unknown = cause.errors[0]
+    if (
+      first !== null &&
+      typeof first === 'object' &&
+      'message' in first &&
+      typeof first.message === 'string'
+    ) {
+      return first.message
+    }
+  }
+  return cause instanceof Error ? cause.message : String(cause)
+}
+
 export function isAppError(e: unknown): e is AppError {
   return e instanceof AppError
 }

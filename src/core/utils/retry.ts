@@ -12,12 +12,28 @@ const DEFAULT_BASE_DELAY_MS = 1000
 const DEFAULT_MAX_DELAY_MS = 10000
 const MAX_JITTER_MS = 200
 
+function statusOf(value: unknown): number | undefined {
+  if (value !== null && typeof value === 'object' && 'status' in value) {
+    return typeof value.status === 'number' ? value.status : undefined
+  }
+  return undefined
+}
+
+function httpStatus(error: unknown): number | undefined {
+  if (error instanceof ApiError) return error.statusCode ?? statusOf(error.cause)
+  return statusOf(error)
+}
+
 function isNonRetryable(error: unknown): boolean {
-  return (
+  if (
     error instanceof ValidationError ||
     error instanceof AuthError ||
     error instanceof ConfigError
-  )
+  ) {
+    return true
+  }
+  const status = httpStatus(error)
+  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429
 }
 
 function computeDelay(attempt: number, baseDelayMs: number, maxDelayMs: number, jitter: boolean): number {
@@ -33,7 +49,7 @@ function extractRetryAfterMs(error: unknown): number | null {
   }
   if (
     error instanceof ApiError &&
-    error.statusCode === 429 &&
+    httpStatus(error) === 429 &&
     error.cause !== null &&
     error.cause !== undefined &&
     typeof error.cause === 'object' &&

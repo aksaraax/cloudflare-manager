@@ -125,15 +125,22 @@ async function runWithConcurrency<T>(
 export async function executeBulk(
   bundles: DomainBundle[],
   apiToken: string,
-  options: { dryRun?: boolean; concurrency?: number },
+  options: {
+    dryRun?: boolean
+    concurrency?: number
+    onProgress?: (done: number, total: number) => void
+  },
 ): Promise<BulkSummary> {
   const startTime = Date.now()
   const dryRun = options.dryRun ?? false
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY
 
-  const tasks = bundles.map(
-    (bundle) => () => processDomain(bundle, apiToken, dryRun),
-  )
+  let done = 0
+  const tasks = bundles.map((bundle) => async () => {
+    const result = await processDomain(bundle, apiToken, dryRun)
+    options.onProgress?.(++done, bundles.length)
+    return result
+  })
 
   const domainResults = await runWithConcurrency(tasks, concurrency)
 
@@ -218,7 +225,11 @@ export function matchesDomain(recordName: string, domain: string, zoneName: stri
 export async function bulkDeleteForMatchedDomains(
   matched: MatchResult['matched'],
   apiToken: string,
-  options?: { filterType?: 'all' | 'mx' | 'txt' | undefined; concurrency?: number | undefined },
+  options?: {
+    filterType?: 'all' | 'mx' | 'txt' | undefined
+    concurrency?: number | undefined
+    onProgress?: ((done: number, total: number) => void) | undefined
+  },
 ): Promise<BulkDeleteSummary> {
   const startTime = Date.now()
   const filterType = options?.filterType ?? 'all'
@@ -240,6 +251,7 @@ export async function bulkDeleteForMatchedDomains(
     const records = await listDnsRecords(apiToken, zoneId)
 
     for (const domain of domains) {
+      options?.onProgress?.(domainResults.length, matched.length)
       const matchedRecords = records.filter((r) => {
         if (!matchesDomain(r.name, domain, zoneName)) return false
         if (filterType === 'mx' && r.type !== 'MX') return false

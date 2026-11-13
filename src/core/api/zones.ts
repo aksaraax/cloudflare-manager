@@ -1,7 +1,9 @@
-import { ApiError } from '../utils/errors.js'
+import { mapConcurrent } from '../utils/concurrency.js'
+import { ApiError, ConfigError, causeDetail } from '../utils/errors.js'
 import { logger } from '../utils/logger.js'
 import { withRetry } from '../utils/retry.js'
-import { getClient } from './client.js'
+import { getClient, tokenKey } from './client.js'
+import { fetchAllPages, type RawPage } from './pagination.js'
 
 export interface ZoneInfo {
   id: string
@@ -20,13 +22,17 @@ interface ZoneCacheEntry {
   fetchedAt: number
 }
 
+export interface AddZoneResult {
+  name: string
+  zone?: ZoneInfo
+  error?: string
+}
+
 const ZONE_CACHE_TTL_MS = 60_000
+const ZONES_PER_PAGE = 50
+const ZONE_CREATE_CONCURRENCY = 3
 
 const zoneCache = new Map<string, ZoneCacheEntry>()
-
-function cacheKey(apiToken: string): string {
-  return apiToken.slice(-8)
-}
 
 function isCacheValid(entry: ZoneCacheEntry): boolean {
   return Date.now() - entry.fetchedAt < ZONE_CACHE_TTL_MS
@@ -67,7 +73,7 @@ function mapZone(z: Record<string, unknown>): ZoneInfo {
 }
 
 export async function listZones(apiToken: string): Promise<ZoneInfo[]> {
-  const key = cacheKey(apiToken)
+  const key = tokenKey(apiToken)
   const cached = zoneCache.get(key)
   if (cached !== undefined && isCacheValid(cached)) {
     logger.debug('zones cache hit', { key })
@@ -77,9 +83,12 @@ export async function listZones(apiToken: string): Promise<ZoneInfo[]> {
   const zones = await withRetry(async () => {
     try {
       const client = getClient(apiToken)
-      const pages = await client.zones.list()
-      const raw = pages.result ?? []
-      return (raw as unknown as Record<string, unknown>[]).map(mapZone)
+      const raw = await fetchAllPages(
+        async (page) =>
+          (await client.zones.list({ page, per_page: ZONES_PER_PAGE })) as unknown as RawPage,
+        ZONES_PER_PAGE,
+      )
+      return raw.map(mapZone)
     } catch (err) {
       throw new ApiError('ZONES_LIST_FAILED', 'Failed to list zones', undefined, undefined, err)
     }
@@ -91,7 +100,7 @@ export async function listZones(apiToken: string): Promise<ZoneInfo[]> {
 }
 
 export async function getZone(apiToken: string, zoneId: string): Promise<ZoneInfo> {
-  const cached = zoneCache.get(cacheKey(apiToken))
+  const cached = zoneCache.get(tokenKey(apiToken))
   if (cached !== undefined && isCacheValid(cached)) {
     const found = cached.zones.find((z) => z.id === zoneId)
     if (found !== undefined) return found
@@ -106,6 +115,116 @@ export async function getZone(apiToken: string, zoneId: string): Promise<ZoneInf
       throw new ApiError('ZONE_GET_FAILED', `Failed to get zone ${zoneId}`, undefined, undefined, err)
     }
   })
+}
+
+export async function findZoneByName(
+  apiToken: string,
+  name: string,
+): Promise<ZoneInfo | undefined> {
+  const cached = zoneCache.get(tokenKey(apiToken))
+  if (cached !== undefined && isCacheValid(cached)) {
+    return cached.zones.find((z) => z.name === name)
+  }
+
+  return withRetry(async () => {
+    try {
+      const client = getClient(apiToken)
+      const page = (await client.zones.list({ name })) as unknown as RawPage
+      const first = (page.result ?? [])[0]
+      return first === undefined ? undefined : mapZone(first as Record<string, unknown>)
+    } catch (err) {
+      throw new ApiError('ZONE_GET_FAILED', `Failed to look up zone ${name}`, undefined, undefined, err)
+    }
+  })
+}
+
+export async function resolveAccountId(apiToken: string): Promise<string> {
+  const configured = process.env['CF_ACCOUNT_ID'] ?? process.env['CFM_ACCOUNT_ID']
+  if (configured) return configured
+
+  const accounts = await withRetry(async () => {
+    try {
+      const client = getClient(apiToken)
+      const page = (await client.accounts.list()) as unknown as RawPage
+      return (page.result ?? []) as Record<string, unknown>[]
+    } catch (err) {
+      throw new ApiError('ACCOUNTS_LIST_FAILED', 'Failed to list accounts', undefined, undefined, err)
+    }
+  })
+
+  const only = accounts[0]
+  if (accounts.length === 1 && only !== undefined) return String(only['id'] ?? '')
+
+  throw new ConfigError(
+    'ACCOUNT_ID_REQUIRED',
+    accounts.length === 0
+      ? 'API token cannot read any account. Set CF_ACCOUNT_ID or grant Account read permission.'
+      : 'API token can access multiple accounts. Set CF_ACCOUNT_ID to choose one.',
+  )
+}
+
+export async function createZone(
+  apiToken: string,
+  accountId: string,
+  name: string,
+): Promise<ZoneInfo> {
+  const zone = await withRetry(async () => {
+    try {
+      const client = getClient(apiToken)
+      const z = await client.zones.create({ account: { id: accountId }, name, type: 'full' })
+      return mapZone(z as unknown as Record<string, unknown>)
+    } catch (err) {
+      throw new ApiError(
+        'ZONE_CREATE_FAILED',
+        `Failed to create zone ${name}: ${causeDetail(err)}`,
+        undefined,
+        undefined,
+        err,
+      )
+    }
+  })
+  await invalidateZoneCache(apiToken)
+  logger.info('zone created', { zoneId: zone.id, name })
+  return zone
+}
+
+export async function addZones(
+  apiToken: string,
+  names: string[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<AddZoneResult[]> {
+  const accountId = await resolveAccountId(apiToken)
+  let done = 0
+
+  return mapConcurrent(names, ZONE_CREATE_CONCURRENCY, async (name) => {
+    let result: AddZoneResult
+    try {
+      result = { name, zone: await createZone(apiToken, accountId, name) }
+    } catch (err) {
+      result = { name, error: err instanceof Error ? err.message : String(err) }
+    }
+    onProgress?.(++done, names.length)
+    return result
+  })
+}
+
+export async function deleteZone(apiToken: string, zoneId: string): Promise<void> {
+  await withRetry(async () => {
+    try {
+      const client = getClient(apiToken)
+      await client.zones.delete({ zone_id: zoneId })
+      logger.info('zone deleted', { zoneId })
+    } catch (err) {
+      throw new ApiError(
+        'ZONE_DELETE_FAILED',
+        `Failed to delete zone ${zoneId}: ${causeDetail(err)}`,
+        undefined,
+        undefined,
+        err,
+      )
+    }
+  })
+  await invalidateZoneCache(apiToken)
 }
 
 export async function pauseZone(apiToken: string, zoneId: string): Promise<void> {
@@ -147,8 +266,8 @@ export async function resumeZone(apiToken: string, zoneId: string): Promise<void
 }
 
 export async function invalidateZoneCache(apiToken: string): Promise<void> {
-  zoneCache.delete(cacheKey(apiToken))
-  logger.debug('zone cache invalidated', { key: cacheKey(apiToken) })
+  zoneCache.delete(tokenKey(apiToken))
+  logger.debug('zone cache invalidated', { key: tokenKey(apiToken) })
 }
 
 export async function refreshZones(apiToken: string): Promise<ZoneInfo[]> {

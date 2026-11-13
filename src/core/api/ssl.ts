@@ -1,3 +1,4 @@
+import { mapConcurrent } from '../utils/concurrency.js'
 import { ApiError } from '../utils/errors.js'
 import { logger } from '../utils/logger.js'
 import { withRetry } from '../utils/retry.js'
@@ -146,5 +147,33 @@ export async function setTls13(
         err,
       )
     }
+  })
+}
+
+export interface BulkSslResult {
+  zoneName: string
+  error?: string
+}
+
+const BULK_SSL_CONCURRENCY = 5
+
+export async function bulkSetSslMode(
+  apiToken: string,
+  zones: ReadonlyArray<{ id: string; name: string }>,
+  mode: SslMode,
+  onProgress?: (done: number, total: number) => void,
+): Promise<BulkSslResult[]> {
+  let done = 0
+
+  return mapConcurrent(zones, BULK_SSL_CONCURRENCY, async (zone) => {
+    let result: BulkSslResult
+    try {
+      await setSslMode(apiToken, zone.id, mode)
+      result = { zoneName: zone.name }
+    } catch (err) {
+      result = { zoneName: zone.name, error: err instanceof Error ? err.message : String(err) }
+    }
+    onProgress?.(++done, zones.length)
+    return result
   })
 }

@@ -8,7 +8,7 @@ Cloudflare Manager is an enterprise-grade operational tool written in TypeScript
 
 - **Bulk DNS Auto-Detect (Flagship)**: Paste multi-line raw text (e.g. `email|password`, `email:password`, CSV spreadsheets), automatically extract root domains using Public Suffix List (`tldts`), deduplicate, match against Cloudflare zones, and provision email DNS records (MX, SPF, DMARC, DKIM) with preview and exponential backoff retry.
 - **Multi-Account Switching**: Manage multiple Cloudflare accounts with fast switching, stored encrypted at rest with AES-256-GCM.
-- **Zone Overview**: Inspect zone status, nameservers, plans, and pause/resume zones.
+- **Zone Management**: List every zone in the account (fully paginated), search by keyword, add domains in bulk, delete zones, inspect status, nameservers, plans, and pause/resume zones.
 - **DNS Record Management**: CRUD records (A, AAAA, CNAME, MX, TXT, NS), proxy toggles, and BIND format export.
 - **Cache Purge**: Purge everything (with double confirmation) or purge specific URLs with automatic chunking.
 - **Firewall Rules**: Manage IP access rules (block, allow, challenge, js_challenge) with strict IPv4/IPv6/CIDR validation.
@@ -47,6 +47,7 @@ Edit `.env` or set environment variables:
 | `TELEGRAM_ALLOWED_IDS` | Required for bot | Comma-separated allowed Telegram user IDs |
 | `CFM_ACCOUNT_NAME` | No | Override active account name |
 | `CFM_API_TOKEN` | No | Override API token directly (bypasses encrypted store) |
+| `CF_ACCOUNT_ID` | No | Cloudflare Account ID. Required for Workers, and for adding domains when the token can access more than one account |
 | `CFM_CONFIG_PATH` | No | Custom encrypted config file path |
 | `CFM_LOG_LEVEL` | No | Log level: `error`, `warn`, `info`, `debug` (default: `info`) |
 | `CFM_DRY_RUN` | No | Set to `true` to simulate all write operations |
@@ -73,6 +74,11 @@ pnpm run start:tui
   - `a`: Add account / Add entry
   - `d`: Delete selected entry (with confirmation)
   - `r`: Refresh data
+- **Dashboard Controls**:
+  - `/`: Search zones by name
+  - `n`: Add one or more domains
+  - `d`: Delete the selected zone (type the zone name to confirm)
+  - `PgUp` / `PgDn`: Jump through long zone lists
 
 ### 2. Telegram Bot Mode
 
@@ -81,14 +87,21 @@ pnpm run start:bot
 ```
 
 Available commands for whitelisted users:
-- `/start` — Welcome menu and commands list
-- `/zones` — List all zones in the active account
+- `/start`, `/help` — Welcome menu and commands list
+- `/zones [keyword]` — List or search all zones, 20 per page with navigation buttons
 - `/zone <name>` — Detailed zone overview
+- `/zone_add [domains]` — Add domains to Cloudflare (inline, pasted list, or `.txt` upload)
+- `/zone_delete <zone>` — Delete a zone (with confirmation)
 - `/dns <zone>` — List DNS records
-- `/bulk` — Interactive multi-step Bulk DNS provisioning
+- `/dns_edit <zone> <type> <name> [content] [ttl=...] [proxied=on|off]` — Edit a DNS record
+- `/dns_export <zone>` — Export DNS records as a BIND file
+- `/dns_delete <zone> <all|type|keyword>` — Bulk delete DNS records in a zone
+- `/bulk` — Interactive multi-step Bulk DNS provisioning (paste text or upload `.txt`)
+- `/bulk_delete` — Bulk delete DNS records by domain/email list (paste text or upload `.txt`)
 - `/cache <zone> [purge_all]` — Purge zone cache
 - `/firewall <zone>` — List IP access firewall rules
 - `/ssl <zone>` — Inspect and configure SSL/TLS settings
+- `/ssl_bulk <off|flexible|full|strict>` — Apply an SSL mode to every zone
 - `/workers` — Overview of Cloudflare Workers
 - `/account [list|switch <name>]` — Switch active account
 - `/lock` / `/unlock` — Manual session lock controls

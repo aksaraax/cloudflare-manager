@@ -1,6 +1,5 @@
 import { type Context } from 'telegraf'
 import { sessionManager } from '../../core/auth/session.js'
-import { accountManager } from '../../core/config/accounts.js'
 import { listZones } from '../../core/api/zones.js'
 import { listDnsRecords, DnsRecord } from '../../core/api/dns.js'
 import { extractDomains } from '../../core/bulk/extractor.js'
@@ -16,7 +15,9 @@ import {
   bundleSelectKeyboard,
   bulkDeleteSelectKeyboard,
 } from '../keyboards/index.js'
-import { escapeHtml } from '../utils.js'
+import { createProgress, escapeHtml, getApiToken } from '../utils.js'
+
+const RESULT_DOMAIN_LIMIT = 15
 
 export interface RecordSelectionState {
   mx: boolean
@@ -52,16 +53,6 @@ export interface BotBulkDeleteFlowState {
   matched?: MatchResult['matched'] | undefined
   deleteType?: 'all' | 'mx' | 'txt' | undefined
   counts?: { all: number; mx: number; txt: number } | undefined
-}
-
-function getApiToken(): string {
-  const token =
-    accountManager.getActiveToken() ??
-    process.env['CFM_API_TOKEN'] ??
-    process.env['CF_API_TOKEN'] ??
-    process.env['CLOUDFLARE_API_TOKEN']
-  if (!token) throw new Error('No Cloudflare API token configured')
-  return token
 }
 
 function getNextStep(
@@ -244,7 +235,7 @@ async function generateAndSendPlan(
   })
 }
 
-export async function handleBulk(ctx: Context): Promise<void> {
+export async function handleBulk(ctx: Context, inputText?: string): Promise<void> {
   const userId = ctx.from?.id
   if (!userId) return
 
@@ -257,7 +248,7 @@ export async function handleBulk(ctx: Context): Promise<void> {
 
     await ctx.reply(
       '<b>Bulk DNS Auto-Detect</b>\n\n' +
-        'Paste teks dengan daftar email/domain Anda di bawah ini (e.g. <code>email|password</code>, <code>email:password</code>, CSV, atau daftar domain).\n' +
+        'Paste teks dengan daftar email/domain Anda di bawah ini (e.g. <code>email|password</code>, <code>email:password</code>, CSV, atau daftar domain), atau upload file <code>.txt</code>.\n' +
         'Sistem akan otomatis mendeteksi domain/subdomain, mencocokkan ke Cloudflare Zones, dan mengatur record DNS pilihan Anda.\n\n' +
         'Kirim /cancel untuk membatalkan.',
       { parse_mode: 'HTML' },
@@ -268,7 +259,7 @@ export async function handleBulk(ctx: Context): Promise<void> {
   const state = flowState.state as unknown as BotBulkFlowState
 
   if (state.step === 'awaiting-paste') {
-    const text = ctx.message && 'text' in ctx.message ? ctx.message.text : ''
+    const text = inputText ?? (ctx.message && 'text' in ctx.message ? ctx.message.text : '')
     if (!text || text.startsWith('/')) {
       await ctx.reply('Silakan paste teks berisi email atau domain.')
       return
@@ -614,13 +605,16 @@ export async function executeBulkImport(ctx: Context, userId: number): Promise<v
 
   await ctx.answerCbQuery('⏳ Executing bulk provisioning…')
   await ctx.editMessageText('⏳ Provisioning DNS records across matched zones…')
+  const progress = createProgress(ctx, 'Provisioning DNS records')
 
   try {
     const token = getApiToken()
     const summary = await executeBulk(state.bundles, token, {
       dryRun: false,
       concurrency: 5,
+      onProgress: progress.update,
     })
+    await progress.stop()
 
     sessionManager.clearFlow(userId)
 
@@ -629,7 +623,7 @@ export async function executeBulkImport(ctx: Context, userId: number): Promise<v
       `Matched: ${summary.matched} | Created: ${summary.created} | Skipped: ${summary.skipped} | Replaced: ${summary.replaced} | Errors: ${summary.errors}\n`,
     ]
 
-    for (const dr of summary.domainResults) {
+    for (const dr of summary.domainResults.slice(0, RESULT_DOMAIN_LIMIT)) {
       lines.push(`<b>${escapeHtml(dr.domain)}:</b>`)
       for (const rec of dr.records) {
         const icon = rec.status === 'error' ? '❌' : '✅'
@@ -637,8 +631,13 @@ export async function executeBulkImport(ctx: Context, userId: number): Promise<v
       }
     }
 
+    if (summary.domainResults.length > RESULT_DOMAIN_LIMIT) {
+      lines.push(`<i>...dan ${summary.domainResults.length - RESULT_DOMAIN_LIMIT} domain lainnya</i>`)
+    }
+
     await ctx.editMessageText(lines.join('\n'), { parse_mode: 'HTML' })
   } catch (err) {
+    await progress.stop()
     sessionManager.clearFlow(userId)
     await ctx.editMessageText(
       `❌ Bulk execution failed: ${escapeHtml(err instanceof Error ? err.message : 'Unknown error')}`,
@@ -647,7 +646,7 @@ export async function executeBulkImport(ctx: Context, userId: number): Promise<v
   }
 }
 
-export async function handleBulkDelete(ctx: Context): Promise<void> {
+export async function handleBulkDelete(ctx: Context, inputText?: string): Promise<void> {
   const userId = ctx.from?.id
   if (!userId) return
 
@@ -660,7 +659,7 @@ export async function handleBulkDelete(ctx: Context): Promise<void> {
 
     await ctx.reply(
       '<b>🗑️ Bulk Delete DNS by List</b>\n\n' +
-        'Paste teks dengan daftar domain atau email (seperti format bulk: <code>email|password</code>, CSV, atau daftar domain).\n' +
+        'Paste teks dengan daftar domain atau email (seperti format bulk: <code>email|password</code>, CSV, atau daftar domain), atau upload file <code>.txt</code>.\n' +
         'Bot akan mencocokkan ke Zone Cloudflare dan mencari DNS record yang ada untuk dihapus secara massal.\n\n' +
         'Ketik /cancel untuk membatalkan.',
       { parse_mode: 'HTML' },
@@ -671,7 +670,7 @@ export async function handleBulkDelete(ctx: Context): Promise<void> {
   const state = flowState.state as unknown as BotBulkDeleteFlowState
 
   if (state.step === 'awaiting-paste') {
-    const text = ctx.message && 'text' in ctx.message ? ctx.message.text : ''
+    const text = inputText ?? (ctx.message && 'text' in ctx.message ? ctx.message.text : '')
     if (!text || text.startsWith('/')) {
       await ctx.reply('Silakan paste teks berisi domain atau email.')
       return
@@ -830,13 +829,16 @@ export async function executeBulkDelete(ctx: Context, userId: number): Promise<v
 
   await ctx.answerCbQuery('⏳ Menghapus record DNS…')
   await ctx.editMessageText('⏳ Menghapus record DNS di Cloudflare secara massal…')
+  const progress = createProgress(ctx, 'Menghapus record DNS (domain)')
 
   try {
     const token = getApiToken()
     const summary = await bulkDeleteForMatchedDomains(state.matched, token, {
       filterType: state.deleteType ?? 'all',
       concurrency: 5,
+      onProgress: progress.update,
     })
+    await progress.stop()
 
     sessionManager.clearFlow(userId)
 
@@ -850,6 +852,7 @@ export async function executeBulkDelete(ctx: Context, userId: number): Promise<v
 
     await ctx.editMessageText(msg, { parse_mode: 'HTML' })
   } catch (err) {
+    await progress.stop()
     sessionManager.clearFlow(userId)
     await ctx.editMessageText(
       `❌ Gagal menghapus DNS: ${escapeHtml(err instanceof Error ? err.message : 'Unknown error')}`,

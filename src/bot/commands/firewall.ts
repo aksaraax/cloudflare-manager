@@ -1,18 +1,6 @@
 import { type Context } from 'telegraf'
-import { accountManager } from '../../core/config/accounts.js'
-import { listZones } from '../../core/api/zones.js'
 import { listFirewallRules } from '../../core/api/firewall.js'
-import { escapeHtml, formatTable } from '../utils.js'
-
-function getApiToken(): string {
-  const token =
-    accountManager.getActiveToken() ??
-    process.env['CFM_API_TOKEN'] ??
-    process.env['CF_API_TOKEN'] ??
-    process.env['CLOUDFLARE_API_TOKEN']
-  if (!token) throw new Error('No Cloudflare API token configured')
-  return token
-}
+import { escapeHtml, formatTable, getApiToken, findZone } from '../utils.js'
 
 export async function handleFirewall(ctx: Context): Promise<void> {
   const text = ctx.message && 'text' in ctx.message ? ctx.message.text : ''
@@ -26,10 +14,7 @@ export async function handleFirewall(ctx: Context): Promise<void> {
 
   try {
     const token = getApiToken()
-    const zones = await listZones(token)
-    const targetZone = zones.find(
-      (z) => z.name.toLowerCase() === zoneQuery.toLowerCase(),
-    )
+    const targetZone = await findZone(token, zoneQuery)
 
     if (!targetZone) {
       await ctx.reply(`Zone <b>${escapeHtml(zoneQuery)}</b> not found.`, {

@@ -4,8 +4,22 @@ import { rateLimitMiddleware } from './middleware/rateLimit.js'
 import { sessionManager } from '../core/auth/session.js'
 import { logger } from '../core/utils/logger.js'
 import { handleStart } from './commands/start.js'
-import { handleZones, handleZone } from './commands/zones.js'
-import { handleDns, handleDnsDelete, executeDnsDelete } from './commands/dns.js'
+import {
+  handleZones,
+  handleZonesPage,
+  handleZone,
+  handleZoneAdd,
+  executeZoneAdd,
+  handleZoneDelete,
+  executeZoneDelete,
+} from './commands/zones.js'
+import {
+  handleDns,
+  handleDnsDelete,
+  executeDnsDelete,
+  handleDnsEdit,
+  handleDnsExport,
+} from './commands/dns.js'
 import {
   handleBulk,
   handleBundleToggle,
@@ -18,10 +32,27 @@ import {
 } from './commands/bulk.js'
 import { handleCache } from './commands/cache.js'
 import { handleFirewall } from './commands/firewall.js'
-import { handleSsl } from './commands/ssl.js'
+import { handleSsl, handleSslBulk, executeSslBulk } from './commands/ssl.js'
 import { handleWorkers } from './commands/workers.js'
 import { handleAccount } from './commands/account.js'
 import { accountManager } from '../core/config/accounts.js'
+import { escapeHtml, readTextDocument } from './utils.js'
+
+const UPLOAD_HANDLERS = {
+  bulk: handleBulk,
+  'bulk-delete': handleBulkDelete,
+  'zone-add': handleZoneAdd,
+} as const
+
+const CONFIRM_HANDLERS = {
+  'zone-add': executeZoneAdd,
+  'zone-delete': executeZoneDelete,
+  'ssl-bulk': executeSslBulk,
+} as const
+
+function isKeyOf<T extends object>(map: T, key: string): key is Extract<keyof T, string> {
+  return Object.hasOwn(map, key)
+}
 
 export async function startBot(): Promise<void> {
   const token = process.env['TELEGRAM_BOT_TOKEN']
@@ -53,17 +84,24 @@ export async function startBot(): Promise<void> {
   })
 
   bot.command('start', handleStart)
+  bot.command('help', handleStart)
   bot.command('zones', handleZones)
   bot.command('zone', handleZone)
+  bot.command('zone_add', (ctx) => handleZoneAdd(ctx))
+  bot.command('add_domain', (ctx) => handleZoneAdd(ctx))
+  bot.command('zone_delete', handleZoneDelete)
   bot.command('dns', handleDns)
+  bot.command('dns_edit', handleDnsEdit)
+  bot.command('dns_export', handleDnsExport)
   bot.command('dns_delete', handleDnsDelete)
   bot.command('dnsdelete', handleDnsDelete)
-  bot.command('bulk', handleBulk)
-  bot.command('bulk_delete', handleBulkDelete)
-  bot.command('bulkdelete', handleBulkDelete)
+  bot.command('bulk', (ctx) => handleBulk(ctx))
+  bot.command('bulk_delete', (ctx) => handleBulkDelete(ctx))
+  bot.command('bulkdelete', (ctx) => handleBulkDelete(ctx))
   bot.command('cache', handleCache)
   bot.command('firewall', handleFirewall)
   bot.command('ssl', handleSsl)
+  bot.command('ssl_bulk', handleSslBulk)
   bot.command('workers', handleWorkers)
   bot.command('account', handleAccount)
 
@@ -103,8 +141,32 @@ export async function startBot(): Promise<void> {
         await handleBulkDelete(ctx)
         return
       }
+      if (flowState?.flow === 'zone-add' && flowState.state['step'] === 'awaiting-paste') {
+        await handleZoneAdd(ctx)
+        return
+      }
     }
     await next()
+  })
+
+  bot.on('document', async (ctx) => {
+    const userId = ctx.from?.id
+    if (!userId) return
+    const flow = sessionManager.getFlowState(userId)?.flow ?? ''
+    if (!isKeyOf(UPLOAD_HANDLERS, flow)) {
+      await ctx.reply(
+        'Jalankan /bulk, /bulk_delete, atau /zone_add terlebih dahulu, lalu upload file .txt.',
+      )
+      return
+    }
+    try {
+      await UPLOAD_HANDLERS[flow](ctx, await readTextDocument(ctx))
+    } catch (err) {
+      await ctx.reply(
+        `❌ Error: ${escapeHtml(err instanceof Error ? err.message : 'Unknown error')}`,
+        { parse_mode: 'HTML' },
+      )
+    }
   })
 
   bot.on('callback_query', async (ctx) => {
@@ -113,6 +175,25 @@ export async function startBot(): Promise<void> {
 
     const data = 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : ''
     if (!data) return
+
+    if (data.startsWith('zones:')) {
+      await handleZonesPage(ctx, data)
+      return
+    }
+
+    const [verb, action = ''] = data.split(':')
+    if (isKeyOf(CONFIRM_HANDLERS, action)) {
+      if (verb === 'confirm') {
+        await CONFIRM_HANDLERS[action](ctx, userId)
+        return
+      }
+      if (verb === 'cancel') {
+        sessionManager.clearFlow(userId)
+        await ctx.answerCbQuery('Operation cancelled.')
+        await ctx.editMessageText('🚫 Operasi dibatalkan.')
+        return
+      }
+    }
 
     if (data.startsWith('bundle-toggle:')) {
       await handleBundleToggle(ctx, userId, data)

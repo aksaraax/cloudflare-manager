@@ -1,3 +1,4 @@
+import { verifyToken } from '../api/client.js'
 import { ConfigError } from '../utils/errors.js'
 import {
   type AccountEntry,
@@ -70,6 +71,8 @@ export class AccountManager {
     if (exists) {
       throw new ConfigError('CONFIG_ACCOUNT_EXISTS', `Account '${name}' already exists`)
     }
+
+    await verifyToken(apiToken)
 
     const entry: AccountEntry = { name, apiToken, addedAt: new Date().toISOString() }
     session.data.accounts.push(entry)
