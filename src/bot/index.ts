@@ -270,9 +270,10 @@ export async function startBot(): Promise<void> {
   })
 
   const IDLE_TIMEOUT_MS = 15 * 60 * 1000
+  // unref: this timer must not keep the process alive after bot.stop() on SIGTERM/SIGINT.
   setInterval(() => {
     sessionManager.checkIdleTimeout(IDLE_TIMEOUT_MS)
-  }, 60_000)
+  }, 60_000).unref()
 
   logger.info('Starting Cloudflare Manager Telegram Bot...')
 

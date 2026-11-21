@@ -34,6 +34,18 @@ pnpm install
 cp .env.example .env
 ```
 
+### Auto setup on a VPS (Ubuntu/Debian, bot mode)
+
+```bash
+git clone https://github.com/aksaraax/cloudflare-manager.git /opt/cloudflare-manager
+cd /opt/cloudflare-manager
+sudo bash setup.sh
+```
+
+Installs Node.js 20 and pnpm if missing, creates `.env` on first run (fill it in, then run again), builds, and registers a `cf-manager` systemd service that starts on boot.
+
+To update later: `git pull && sudo bash setup.sh`. Logs: `journalctl -u cf-manager -f`.
+
 ---
 
 ## Configuration
